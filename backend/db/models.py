@@ -1,8 +1,8 @@
 """SQLAlchemy models for the Fiscora app database."""
 import datetime
+import uuid
 
 from sqlalchemy import (
-    Boolean,
     Column,
     DateTime,
     Float,
@@ -33,6 +33,33 @@ class User(Base):
     goals = relationship("Goal", back_populates="user", cascade="all, delete-orphan")
     watchlist_items = relationship("WatchlistItem", back_populates="user", cascade="all, delete-orphan")
     chat_messages = relationship("ChatMessage", back_populates="user", cascade="all, delete-orphan")
+    refresh_tokens = relationship("RefreshToken", back_populates="user", cascade="all, delete-orphan")
+
+
+class RefreshToken(Base):
+    """A single refresh token in a rotation chain. Only the SHA-256 hash of
+    the opaque token value is stored -- never the raw token -- so a DB leak
+    doesn't hand out usable credentials.
+
+    `family_id` links every token descended from one login/signup together.
+    On each successful refresh, the presented token is marked revoked and
+    `replaced_by_id` points at its successor; if a token that's already
+    revoked is ever presented again (replay of a stolen token), the whole
+    family is revoked to kill that session chain.
+    """
+
+    __tablename__ = "refresh_tokens"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    token_hash = Column(String, unique=True, index=True, nullable=False)
+    family_id = Column(String, index=True, nullable=False, default=lambda: uuid.uuid4().hex)
+    created_at = Column(DateTime, default=utcnow)
+    expires_at = Column(DateTime, nullable=False)
+    revoked_at = Column(DateTime, nullable=True)
+    replaced_by_id = Column(Integer, ForeignKey("refresh_tokens.id"), nullable=True)
+
+    user = relationship("User", back_populates="refresh_tokens")
 
 
 class ChatMessage(Base):

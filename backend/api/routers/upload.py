@@ -9,6 +9,9 @@ from backend.tools.csv_parser import parse_csv_transactions, validate_csv_format
 
 router = APIRouter(tags=["upload"])
 
+MAX_CSV_UPLOAD_BYTES = 5 * 1024 * 1024  # 5MB
+_READ_CHUNK_BYTES = 1024 * 1024
+
 
 @router.post("/upload-csv", response_model=UploadCsvResponse)
 async def upload_csv(
@@ -16,7 +19,20 @@ async def upload_csv(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    content = await file.read()
+    chunks: list[bytes] = []
+    total_bytes = 0
+    while True:
+        chunk = await file.read(_READ_CHUNK_BYTES)
+        if not chunk:
+            break
+        total_bytes += len(chunk)
+        if total_bytes > MAX_CSV_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                detail=f"CSV file exceeds the {MAX_CSV_UPLOAD_BYTES // (1024 * 1024)}MB upload limit",
+            )
+        chunks.append(chunk)
+    content = b"".join(chunks)
 
     is_valid, message = validate_csv_format(content)
     if not is_valid:

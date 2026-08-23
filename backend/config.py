@@ -47,9 +47,17 @@ DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./fiscora.db")
 AGENT_DB_FILE = os.getenv("AGENT_DB_FILE", "fiscora_agents.db")
 
 # --- Auth ---
-JWT_SECRET = os.getenv("JWT_SECRET", "dev-insecure-secret-change-me")
+# No fallback: an unset JWT_SECRET must stop the app from starting rather than
+# silently signing tokens with a well-known dev value, in every environment.
+JWT_SECRET = os.getenv("JWT_SECRET")
+if not JWT_SECRET:
+    raise RuntimeError(
+        "JWT_SECRET environment variable is not set. Set it in your .env file "
+        "(see .env.example) before starting the app -- there is no default."
+    )
 JWT_ALGORITHM = "HS256"
-JWT_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES", "1440"))
+JWT_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES", "15"))
+REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "30"))
 
 # --- Feature flags ---
 DEBUG_MODE = os.getenv("FISCORA_DEBUG", "true").lower() == "true"

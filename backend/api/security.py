@@ -2,6 +2,8 @@
 with a Next.js frontend: bearer token in an Authorization header.
 """
 import datetime
+import hashlib
+import secrets
 
 import bcrypt
 from jose import JWTError, jwt
@@ -30,3 +32,16 @@ def decode_access_token(token: str) -> str:
     if subject is None:
         raise JWTError("Token missing subject")
     return subject
+
+
+def generate_refresh_token() -> str:
+    """An opaque, high-entropy token -- not a JWT. Verified by DB lookup on
+    its hash (see hash_refresh_token), which is what makes server-side
+    revocation possible."""
+    return secrets.token_urlsafe(48)
+
+
+def hash_refresh_token(token: str) -> str:
+    """SHA-256 hash stored in place of the raw token so a DB leak alone
+    doesn't hand out usable credentials."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
