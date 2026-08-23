@@ -100,5 +100,27 @@ app.include_router(goals.router)
 app.include_router(transactions.router)
 app.include_router(health.router)
 
+
+@app.get("/health/live")
+def health_live():
+    """Liveness target for the ALB target group -- deliberately cheap (no DB
+    round-trip) so it can't flap under load or during an Alembic migration
+    window.
+
+    Not registered at the plain /health path: Agno's AgentOS already claims
+    that path for its own built-in health check (agno/os/app.py, added by
+    get_app() before this module's own routes exist), and Starlette resolves
+    routes in registration order -- a same-path handler defined here would
+    silently never run, shadowed by Agno's. Overriding Agno's route is
+    possible (pass a base_app + on_route_conflict="preserve_base_app" to
+    AgentOS) but that also disables AgentOS's own default exception handlers
+    for the whole API (see get_app()'s `if not self._app_set` block), which
+    is out of scope for a health-check path. Living at our own path instead
+    keeps this endpoint's behavior under our control regardless of what
+    future Agno versions do with /health -- see alb.tf, which points here.
+    """
+    return {"status": "ok"}
+
+
 if __name__ == "__main__":
     agent_os.serve(app="backend.main:app", reload=True)

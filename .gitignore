@@ -24,3 +24,11 @@ lighthouse-reports/
 # OS
 .DS_Store
 Thumbs.db
+
+# Terraform
+infra/**/.terraform/
+infra/**/*.tfstate
+infra/**/*.tfstate.*
+infra/**/terraform.tfvars
+infra/**/*.tfplan
+infra/**/.terraform.lock.hcl

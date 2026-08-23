@@ -1,0 +1,25 @@
+aws_region  = "us-east-1"
+project     = "fiscora"
+environment = "prod"
+
+jwt_secret       = "generate-a-long-random-value"
+openai_api_key   = ""
+xai_api_key      = ""
+google_api_key   = ""
+default_provider = "openai"
+default_model_id = "gpt-5.2-2025-12-11"
+
+amplify_repo_url            = "https://github.com/your-org/fiscora"
+amplify_github_access_token = "" # GitHub PAT with repo scope; only needed on first connect
+amplify_branch               = "main"
+
+github_repo = "your-org/fiscora" # used to scope the GitHub Actions OIDC deploy role
+
+# --- Domain / HTTPS (required -- see infra/aws/README.md) ---
+domain_name         = "" # e.g. "fiscora.app" -- you must own this
+api_subdomain       = "api"
+app_subdomain       = "app"
+create_route53_zone = true # false if this domain's DNS is already in Route 53 in this account
+
+# --- Cost tradeoff -- see "Costs" section in infra/aws/README.md ---
+single_nat_gateway = false # true = ~$35/mo cheaper, no AZ-outage isolation for outbound traffic

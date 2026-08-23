@@ -1,0 +1,111 @@
+name: Deploy backend to AWS
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - "requirements.txt"
+      - ".github/workflows/deploy-backend.yml"
+  workflow_dispatch: {}
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: fiscora-prod-backend
+  ECS_CLUSTER: fiscora-prod
+  ECS_SERVICE: fiscora-prod-backend
+  ECS_TASK_FAMILY: fiscora-prod-backend
+  CONTAINER_NAME: backend
+
+permissions:
+  id-token: write # for OIDC -> AWS
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push image
+        id: build
+        env:
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -f backend/Dockerfile -t "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" -t "$REGISTRY/$ECR_REPOSITORY:latest" .
+          docker push "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          docker push "$REGISTRY/$ECR_REPOSITORY:latest"
+          echo "image=$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Download current task definition
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition "$ECS_TASK_FAMILY" \
+            --query taskDefinition > task-definition.json
+
+      - name: Render task definition with the new image
+        id: render
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name: ${{ env.CONTAINER_NAME }}
+          image: ${{ steps.build.outputs.image }}
+
+      - name: Register migration task definition (new image, alembic command)
+        id: register-migration
+        run: |
+          jq \
+            '.containerDefinitions[0].command = ["alembic", "upgrade", "head"]
+             | del(.containerDefinitions[0].portMappings)
+             | del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
+                    .compatibilities, .registeredAt, .registeredBy)' \
+            "${{ steps.render.outputs.task-definition }}" > migration-task-definition.json
+
+          arn=$(aws ecs register-task-definition \
+            --cli-input-json file://migration-task-definition.json \
+            --query "taskDefinition.taskDefinitionArn" --output text)
+          echo "arn=$arn" >> "$GITHUB_OUTPUT"
+
+      - name: Run migration (alembic upgrade head) and wait for it to finish
+        env:
+          SUBNETS: ${{ secrets.ECS_PRIVATE_SUBNET_IDS }}
+          SECURITY_GROUP: ${{ secrets.ECS_BACKEND_SECURITY_GROUP_ID }}
+        run: |
+          task_arn=$(aws ecs run-task \
+            --cluster "$ECS_CLUSTER" \
+            --task-definition "${{ steps.register-migration.outputs.arn }}" \
+            --launch-type FARGATE \
+            --network-configuration "awsvpcConfiguration={subnets=[$SUBNETS],securityGroups=[$SECURITY_GROUP],assignPublicIp=DISABLED}" \
+            --query "tasks[0].taskArn" --output text)
+
+          echo "Migration task: $task_arn"
+          aws ecs wait tasks-stopped --cluster "$ECS_CLUSTER" --tasks "$task_arn"
+
+          exit_code=$(aws ecs describe-tasks --cluster "$ECS_CLUSTER" --tasks "$task_arn" \
+            --query "tasks[0].containers[0].exitCode" --output text)
+
+          if [ "$exit_code" != "0" ]; then
+            echo "::error::alembic upgrade head failed (exit code $exit_code) -- aborting deploy, service was NOT updated."
+            aws ecs describe-tasks --cluster "$ECS_CLUSTER" --tasks "$task_arn"
+            exit 1
+          fi
+          echo "Migration succeeded."
+
+      - name: Deploy to ECS
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render.outputs.task-definition }}
+          service: ${{ env.ECS_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true
