@@ -1,0 +1,39 @@
+# Merged & deduplicated from:
+#   AI Finance Agent Team/requirements.txt
+#   AI Financial Coach Agent/requirements.txt  (google-adk/streamlit dropped -- logic ported to Agno, see STEP 0 audit)
+#   AI Investment Agent/requirements.txt
+#   XAI Finance Agent/requirements.txt
+
+# Agent framework
+agno>=2.2.10
+
+# LLM providers (all three kept wired up via backend/models/llm_router.py;
+# DEFAULT_PROVIDER=openai is used unless overridden per-agent)
+openai
+xai-sdk
+google-genai
+
+# Tools
+duckduckgo-search
+ddgs  # agno.tools.duckduckgo depends on this (formerly bundled with duckduckgo-search)
+yfinance
+
+# Data / CSV parsing (ported from AI Financial Coach Agent)
+pandas>=2.0.0
+pydantic>=2.0.0
+email-validator
+
+# DB
+sqlalchemy>=2.0.0
+psycopg2-binary
+alembic
+
+# API layer (phase 3)
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+python-multipart
+python-jose[cryptography]
+bcrypt
+
+# Config
+python-dotenv>=1.0.0

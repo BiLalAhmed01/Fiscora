@@ -1,0 +1,26 @@
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Node / frontend
+node_modules/
+.next/
+tsconfig.tsbuildinfo
+
+# Lighthouse reports
+lighthouse-reports/
+
+# OS
+.DS_Store
+Thumbs.db
