@@ -16,7 +16,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from backend.api.routers import auth, chat, profile, upload
+from backend.api.routers import auth, chat, health, profile, upload
 from backend.db.models import Base
 from backend.db.session import get_db
 from backend.rate_limit import limiter
@@ -58,6 +58,7 @@ def app(db_session_factory):
     test_app.include_router(profile.router)
     test_app.include_router(upload.router)
     test_app.include_router(chat.router)
+    test_app.include_router(health.router)
 
     def override_get_db():
         db = db_session_factory()
