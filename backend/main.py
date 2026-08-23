@@ -50,5 +50,14 @@ app.include_router(watchlist.router)
 app.include_router(goals.router)
 app.include_router(transactions.router)
 
+
+@app.get("/health")
+def health():
+    """Liveness/readiness target for the ALB target group -- deliberately
+    cheap (no DB round-trip) so it can't flap under load or during an
+    Alembic migration window."""
+    return {"status": "ok"}
+
+
 if __name__ == "__main__":
     agent_os.serve(app="backend.main:app", reload=True)
