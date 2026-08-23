@@ -8,7 +8,7 @@ import json
 import re
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -19,6 +19,7 @@ from backend.api.deps import get_current_user
 from backend.api.schemas import ChatRequest
 from backend.db.models import ChatMessage, Goal, Transaction, User, WatchlistItem
 from backend.db.session import SessionLocal, get_db
+from backend.rate_limit import limiter
 
 NOT_CONFIGURED_MESSAGE = (
     "Fiscora isn't connected to an AI provider yet -- ask whoever runs this deployment to set "
@@ -123,7 +124,9 @@ def _ndjson(agent: str | None, content: str) -> str:
 
 
 @router.post("/chat")
+@limiter.limit("20/minute")  # cost control -- each call is a paid LLM request
 async def chat(
+    request: Request,
     payload: ChatRequest,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),

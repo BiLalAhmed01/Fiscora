@@ -34,6 +34,7 @@ uvicorn[standard]>=0.29.0
 python-multipart
 python-jose[cryptography]
 bcrypt
+slowapi>=0.1.9
 
 # Config
 python-dotenv>=1.0.0

@@ -4,10 +4,14 @@ watchlist, goals) on the same app for the Next.js frontend to call.
 """
 from agno.os import AgentOS
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 from backend import config
 from backend.agents.coordinator_agent import build_coordinator_team
 from backend.api.routers import auth, chat, goals, profile, transactions, upload, watchlist
+from backend.rate_limit import limiter
 
 # Schema is managed by Alembic (backend/alembic/), not by
 # Base.metadata.create_all() -- create_all() has no notion of revisions, so
@@ -30,6 +34,13 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Per-client-IP rate limiting (brute-force protection on auth, cost control
+# on the LLM-backed /chat endpoint). Limits are set per-route via
+# @limiter.limit(...) in the router modules themselves.
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 
 app.include_router(auth.router)
 app.include_router(chat.router)

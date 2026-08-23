@@ -1,6 +1,6 @@
 import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from backend import config
@@ -14,8 +14,15 @@ from backend.api.security import (
 )
 from backend.db.models import RefreshToken, User
 from backend.db.session import get_db
+from backend.rate_limit import limiter
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+# 5/minute per client IP on the credential-handling endpoints -- brute-force
+# / credential-stuffing protection. slowapi's decorator requires the
+# decorated endpoint to accept a `request: Request` parameter (it reads the
+# client IP off it via the limiter's key_func).
+AUTH_RATE_LIMIT = "5/minute"
 
 
 def _issue_token_pair(db: Session, user: User, family_id: str | None = None) -> TokenResponse:
@@ -43,7 +50,8 @@ def _issue_token_pair(db: Session, user: User, family_id: str | None = None) -> 
 
 
 @router.post("/signup", response_model=TokenResponse)
-def signup(payload: SignupRequest, db: Session = Depends(get_db)):
+@limiter.limit(AUTH_RATE_LIMIT)
+def signup(request: Request, payload: SignupRequest, db: Session = Depends(get_db)):
     existing = db.query(User).filter(User.email == payload.email).first()
     if existing:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
@@ -57,7 +65,8 @@ def signup(payload: SignupRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/login", response_model=TokenResponse)
-def login(payload: LoginRequest, db: Session = Depends(get_db)):
+@limiter.limit(AUTH_RATE_LIMIT)
+def login(request: Request, payload: LoginRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == payload.email).first()
     if user is None or not verify_password(payload.password, user.hashed_password):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password")
@@ -66,7 +75,8 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/refresh", response_model=TokenResponse)
-def refresh(payload: RefreshRequest, db: Session = Depends(get_db)):
+@limiter.limit(AUTH_RATE_LIMIT)
+def refresh(request: Request, payload: RefreshRequest, db: Session = Depends(get_db)):
     token_hash = hash_refresh_token(payload.refresh_token)
     token_row = db.query(RefreshToken).filter(RefreshToken.token_hash == token_hash).first()
 

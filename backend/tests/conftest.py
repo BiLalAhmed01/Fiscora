@@ -9,6 +9,9 @@ without any provider API keys.
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -16,6 +19,21 @@ from sqlalchemy.pool import StaticPool
 from backend.api.routers import auth, chat, profile, upload
 from backend.db.models import Base
 from backend.db.session import get_db
+from backend.rate_limit import limiter
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limiter():
+    """The slowapi Limiter is a module-level singleton (backend.rate_limit)
+    shared by every test's app instance, and TestClient requests all appear
+    to come from the same synthetic client address -- without resetting its
+    counters between tests, whichever test happens to run first would burn
+    through the /auth or /chat quota and cause unrelated later tests to see
+    429s instead of the responses they're asserting on.
+    """
+    limiter.reset()
+    yield
+    limiter.reset()
 
 
 @pytest.fixture()
@@ -33,6 +51,9 @@ def db_session_factory():
 @pytest.fixture()
 def app(db_session_factory):
     test_app = FastAPI()
+    test_app.state.limiter = limiter
+    test_app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+    test_app.add_middleware(SlowAPIMiddleware)
     test_app.include_router(auth.router)
     test_app.include_router(profile.router)
     test_app.include_router(upload.router)
