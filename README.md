@@ -74,7 +74,55 @@ docker compose up --build
 - Postgres: `localhost:5432` (user/pass/db: `fiscora`/`fiscora`/`fiscora`)
 
 Docker Compose overrides `DATABASE_URL` to point at the `postgres` service —
-you don't need to change it in `.env` for the Docker path.
+you don't need to change it in `.env` for the Docker path. Run the migration
+against that Postgres DB before (or right after) `docker compose up`:
+
+```bash
+docker compose run --rm backend alembic upgrade head
+```
+
+## Database migrations
+
+Schema changes are managed with [Alembic](https://alembic.sqlalchemy.org/)
+(`backend/alembic/`), not `Base.metadata.create_all()`. `create_all()` can
+only create tables that don't exist yet — it has no concept of a revision
+history, so it can't apply an `ALTER TABLE` to an existing DB and silently
+drifts from what the models say once the schema changes. `backend/main.py`
+no longer calls it.
+
+**Before starting the app for the first time, or after pulling changes that
+touch `backend/db/models.py`, run:**
+
+```bash
+alembic upgrade head
+```
+
+This targets whatever `DATABASE_URL` the app itself would use (SQLite
+locally by default, Postgres under Docker/production) — `backend/alembic/env.py`
+reads it straight from `backend.config.DATABASE_URL`.
+
+To generate a new migration after changing a model:
+
+```bash
+alembic revision --autogenerate -m "describe the change"
+```
+
+Always read the generated migration before committing it — autogenerate is a
+diff tool, not a guarantee; review column types, nullability, and index
+changes especially.
+
+**Design choice — migrations are not auto-run on app startup.** An earlier
+option was to have `backend/main.py` call `alembic upgrade head` itself so
+`uvicorn backend.main:app` "just works" with no extra step. That was
+rejected: auto-running migrations on every boot means multiple workers/
+replicas can race to apply the same `ALTER TABLE` concurrently, and it turns
+a forgotten migration into a silent, unpredictable moment during a request
+instead of a loud, obvious failure before the app ever starts serving
+traffic. This mirrors the same fail-fast philosophy already used for
+`JWT_SECRET` in `backend/config.py`: missing setup should stop the app at
+boot with a clear message, not paper over the gap. The tradeoff is one extra
+manual (or CI/CD-scripted) step per deploy — documented above, and worth
+automating in your deploy pipeline (not the app itself) once you have one.
 
 ## Running locally without Docker
 
@@ -89,6 +137,8 @@ pip install -r requirements.txt
 cp .env.example .env
 # fill in at least one provider API key in .env
 # DATABASE_URL already defaults to sqlite:///./fiscora.db, no Postgres needed
+
+alembic upgrade head   # create/update the schema -- see "Database migrations" below
 
 uvicorn backend.main:app --reload --port 8000
 ```

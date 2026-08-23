@@ -8,11 +8,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend import config
 from backend.agents.coordinator_agent import build_coordinator_team
 from backend.api.routers import auth, chat, goals, profile, transactions, upload, watchlist
-from backend.db.models import Base
-from backend.db.session import engine
 
-Base.metadata.create_all(bind=engine)
-
+# Schema is managed by Alembic (backend/alembic/), not by
+# Base.metadata.create_all() -- create_all() has no notion of revisions, so
+# it can't evolve an existing DB and silently diverges from the migration
+# history over time. Run `alembic upgrade head` before starting the app (see
+# README "Database migrations"). This is intentionally not auto-run here:
+# auto-running migrations on every app boot risks two workers racing an
+# ALTER TABLE at once and masks a forgotten migration behind app code that
+# "just happens" to still work -- better to fail loudly if the schema isn't
+# up to date.
 coordinator_team = build_coordinator_team()
 
 agent_os = AgentOS(teams=[coordinator_team])
