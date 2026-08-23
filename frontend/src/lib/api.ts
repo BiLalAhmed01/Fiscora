@@ -1,33 +1,100 @@
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
 
-export function getToken(): string | null {
-  if (typeof window === "undefined") return null;
-  return localStorage.getItem("fiscora_token");
+// --- Access token storage ---
+// Held in memory only (never localStorage/sessionStorage) so it isn't
+// readable by a stray XSS payload that dumps storage. Lost on full page
+// reload by design -- auth-context.tsx recovers it via a silent call to
+// /api/auth/refresh on mount, which rides the httpOnly refresh-token
+// cookie set by the Next.js proxy routes in app/api/auth/*.
+let accessToken: string | null = null;
+
+export function getAccessToken(): string | null {
+  return accessToken;
 }
 
-export function setToken(token: string) {
-  localStorage.setItem("fiscora_token", token);
+export function setAccessToken(token: string | null) {
+  accessToken = token;
 }
 
-export function clearToken() {
-  localStorage.removeItem("fiscora_token");
+// Called when a refresh attempt definitively fails (not "network blip" --
+// "the session is over"), so auth-context can clear its state and redirect
+// to /login. Registered by AuthProvider; kept as a plain callback rather
+// than an import cycle back into the context module.
+let onAuthExpired: (() => void) | null = null;
+
+export function setAuthExpiredHandler(handler: (() => void) | null) {
+  onAuthExpired = handler;
 }
 
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const token = getToken();
+// --- Network retry (connectivity failures only) ---
+// Retries only when fetch() itself throws (DNS/connection failure, offline,
+// CORS preflight failure, etc.) -- never for a successful response that
+// merely carries a 4xx/5xx status, which is the caller's business logic to
+// handle, not something backoff-and-retry can fix.
+async function fetchWithRetry(url: string, init: RequestInit, retries = 2, delayMs = 300): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch (err) {
+    if (retries <= 0) throw err;
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    return fetchWithRetry(url, init, retries - 1, delayMs * 2);
+  }
+}
+
+// --- Refresh single-flight ---
+// If several requests 401 at the same moment (e.g. a page fires off
+// parallel fetches right as the access token expires), only one of them
+// should call /api/auth/refresh. The backend's refresh token rotates on
+// every use and revokes the whole session on reuse of an already-rotated
+// token, so firing concurrent refreshes would self-inflict a logout.
+let refreshInFlight: Promise<string | null> | null = null;
+
+export function refreshAccessToken(): Promise<string | null> {
+  if (!refreshInFlight) {
+    refreshInFlight = (async () => {
+      try {
+        const res = await fetchWithRetry("/api/auth/refresh", { method: "POST" });
+        if (!res.ok) {
+          accessToken = null;
+          return null;
+        }
+        const data = await res.json();
+        accessToken = data.access_token as string;
+        return accessToken;
+      } catch {
+        accessToken = null;
+        return null;
+      } finally {
+        refreshInFlight = null;
+      }
+    })();
+  }
+  return refreshInFlight;
+}
+
+async function request<T>(path: string, options: RequestInit = {}, _isRetry = false): Promise<T> {
   const headers: Record<string, string> = {
     ...(options.body && !(options.body instanceof FormData)
       ? { "Content-Type": "application/json" }
       : {}),
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
     ...((options.headers as Record<string, string>) || {}),
   };
 
   let res: Response;
   try {
-    res = await fetch(`${API_URL}${path}`, { ...options, headers });
+    res = await fetchWithRetry(`${API_URL}${path}`, { ...options, headers });
   } catch {
     throw new Error("Can't reach Fiscora's server. Check your connection and try again.");
+  }
+
+  if (res.status === 401 && !_isRetry) {
+    const newToken = await refreshAccessToken();
+    if (newToken) {
+      return request<T>(path, options, true);
+    }
+    onAuthExpired?.();
+    throw new Error("Your session expired -- please log in again.");
   }
 
   if (!res.ok) {
@@ -46,16 +113,55 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 }
 
 // --- Auth ---
-export interface TokenResponse {
+// These hit the Next.js proxy routes (app/api/auth/*), never FastAPI
+// directly: the proxy is what sets/reads the httpOnly refresh-token cookie.
+// The refresh_token itself never reaches this module or any client code.
+export interface AuthResponse {
   access_token: string;
   token_type: string;
+  expires_in: number;
 }
 
-export const signup = (email: string, password: string) =>
-  request<TokenResponse>("/auth/signup", { method: "POST", body: JSON.stringify({ email, password }) });
+async function authProxyRequest(path: string, body: unknown): Promise<AuthResponse> {
+  let res: Response;
+  try {
+    res = await fetchWithRetry(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    throw new Error("Can't reach Fiscora's server. Check your connection and try again.");
+  }
 
-export const login = (email: string, password: string) =>
-  request<TokenResponse>("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.detail || res.statusText);
+  }
+  return data as AuthResponse;
+}
+
+export async function signup(email: string, password: string): Promise<AuthResponse> {
+  const data = await authProxyRequest("/api/auth/signup", { email, password });
+  accessToken = data.access_token;
+  return data;
+}
+
+export async function login(email: string, password: string): Promise<AuthResponse> {
+  const data = await authProxyRequest("/api/auth/login", { email, password });
+  accessToken = data.access_token;
+  return data;
+}
+
+export async function logout(): Promise<void> {
+  accessToken = null;
+  try {
+    await fetch("/api/auth/logout", { method: "POST" });
+  } catch {
+    // Best-effort revoke -- the local access token is already cleared above,
+    // so the client-side session ends regardless of backend reachability.
+  }
+}
 
 // --- Profile ---
 export interface Profile {
@@ -151,24 +257,36 @@ function parseNdjsonLines(buffer: string, onChunk: (chunk: ChatChunk) => void): 
   return remainder;
 }
 
+// streamChat doesn't go through request() (it needs the raw Response body
+// for streaming), so it duplicates the 401-refresh-retry dance rather than
+// sharing request()'s implementation.
 export async function streamChat(
   message: string,
   sessionId: string | null,
-  onChunk: (chunk: ChatChunk) => void
+  onChunk: (chunk: ChatChunk) => void,
+  _isRetry = false
 ): Promise<string> {
-  const token = getToken();
   let res: Response;
   try {
-    res = await fetch(`${API_URL}/chat`, {
+    res = await fetchWithRetry(`${API_URL}/chat`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
       },
       body: JSON.stringify({ message, session_id: sessionId }),
     });
   } catch {
     throw new Error("Can't reach Fiscora's server. Check your connection and try again.");
+  }
+
+  if (res.status === 401 && !_isRetry) {
+    const newToken = await refreshAccessToken();
+    if (newToken) {
+      return streamChat(message, sessionId, onChunk, true);
+    }
+    onAuthExpired?.();
+    throw new Error("Your session expired -- please log in again.");
   }
 
   if (!res.ok || !res.body) {
