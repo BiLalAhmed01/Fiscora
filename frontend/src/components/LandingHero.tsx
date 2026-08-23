@@ -641,7 +641,11 @@ export default function LandingHero() {
     // execution across the whole trace, not just when it happens). Only
     // restore a returning visitor's own opt-in choice, and only after mount
     // so there's no hydration mismatch or layout shift on first paint.
-    if (localStorage.getItem("fiscora_richer_visuals") === "1") setShowOrb(true);
+    // Deferred a tick so setShowOrb isn't called synchronously within the
+    // effect body itself (react-hooks/set-state-in-effect).
+    if (localStorage.getItem("fiscora_richer_visuals") === "1") {
+      queueMicrotask(() => setShowOrb(true));
+    }
   }, []);
 
   const toggleOrb = () => {

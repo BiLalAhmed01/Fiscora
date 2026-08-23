@@ -51,7 +51,11 @@ function DashboardInner() {
   }, []);
 
   useEffect(() => {
-    refetch();
+    // Deferred a tick so refetch()'s setState calls aren't synchronous
+    // within the effect body itself (react-hooks/set-state-in-effect).
+    queueMicrotask(() => {
+      refetch();
+    });
   }, [refetch]);
 
   if (loading || !profile) {
