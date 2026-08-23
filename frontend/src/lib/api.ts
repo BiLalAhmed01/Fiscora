@@ -49,25 +49,56 @@ async function fetchWithRetry(url: string, init: RequestInit, retries = 2, delay
 // token, so firing concurrent refreshes would self-inflict a logout.
 let refreshInFlight: Promise<string | null> | null = null;
 
+// Thrown when /api/auth/refresh fails in a way that says nothing about
+// whether the session itself is still valid (429 rate-limited -- see
+// backend/api/routers/auth.py's REFRESH_RATE_LIMIT -- or a transient 5xx).
+// Callers should surface this as "try again", not force a logout: only a
+// genuine 401 (refreshAccessToken() resolving to null) means the session is
+// actually dead.
+export class RetryableAuthError extends Error {}
+
+async function attemptRefresh(allowRetry: boolean): Promise<string | null> {
+  let res: Response;
+  try {
+    res = await fetchWithRetry("/api/auth/refresh", { method: "POST" });
+  } catch {
+    // Network failure even after fetchWithRetry's own backoff -- give up
+    // quietly rather than force a logout over connectivity, but don't keep
+    // retrying indefinitely either.
+    accessToken = null;
+    return null;
+  }
+
+  if (res.status === 401) {
+    // Genuine session death: the refresh token was expired, revoked, or
+    // reuse-detected and the backend killed the whole session.
+    accessToken = null;
+    return null;
+  }
+
+  if (!res.ok) {
+    // 429 or 5xx -- the refresh token itself may still be perfectly valid.
+    // Don't touch accessToken and don't force logout: one quiet retry after
+    // a short delay, then surface a retryable error for the caller's
+    // current request rather than treating "server is busy" as "you're
+    // logged out".
+    if (allowRetry) {
+      await new Promise((resolve) => setTimeout(resolve, 750));
+      return attemptRefresh(false);
+    }
+    throw new RetryableAuthError("Fiscora's server is busy right now -- please try again in a moment.");
+  }
+
+  const data = await res.json();
+  accessToken = data.access_token as string;
+  return accessToken;
+}
+
 export function refreshAccessToken(): Promise<string | null> {
   if (!refreshInFlight) {
-    refreshInFlight = (async () => {
-      try {
-        const res = await fetchWithRetry("/api/auth/refresh", { method: "POST" });
-        if (!res.ok) {
-          accessToken = null;
-          return null;
-        }
-        const data = await res.json();
-        accessToken = data.access_token as string;
-        return accessToken;
-      } catch {
-        accessToken = null;
-        return null;
-      } finally {
-        refreshInFlight = null;
-      }
-    })();
+    refreshInFlight = attemptRefresh(true).finally(() => {
+      refreshInFlight = null;
+    });
   }
   return refreshInFlight;
 }

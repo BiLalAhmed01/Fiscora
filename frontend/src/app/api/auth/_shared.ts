@@ -43,6 +43,17 @@ export async function forwardToBackend(path: string, body: unknown): Promise<Res
   });
 }
 
+/** A failed /auth/refresh call only proves the refresh token itself is dead
+ * on a genuine 401 (invalid, revoked, or reuse-detected -- the backend has
+ * killed the whole session). A 429 (rate-limited, see backend/api/routers/
+ * auth.py's REFRESH_RATE_LIMIT) or 5xx (transient backend issue) says
+ * nothing about the token's validity -- treating those the same as a 401
+ * would log a real user out over a blip that has nothing to do with
+ * whether their session is still good. */
+export function isRefreshTokenDead(status: number): boolean {
+  return status === 401;
+}
+
 export function upstreamUnreachable() {
   return NextResponse.json(
     { detail: "Can't reach Fiscora's server. Check your connection and try again." },

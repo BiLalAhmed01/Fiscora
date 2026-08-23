@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import {
   forwardToBackend,
+  isRefreshTokenDead,
   publicTokenBody,
   REFRESH_COOKIE,
   refreshCookieOptions,
@@ -27,12 +28,17 @@ export async function POST() {
   const data = await backendRes.json().catch(() => ({}));
 
   if (!backendRes.ok) {
-    // The refresh token itself was rejected (expired, revoked, or reuse
-    // detected and the whole family was killed server-side). It's dead
-    // either way -- clear the cookie so we don't keep sending a token that
-    // will trip reuse-detection on a future attempt.
     const response = NextResponse.json(data, { status: backendRes.status });
-    response.cookies.delete({ name: REFRESH_COOKIE, path: "/api/auth" });
+    if (isRefreshTokenDead(backendRes.status)) {
+      // The refresh token itself was rejected (expired, revoked, or reuse
+      // detected and the whole family was killed server-side). It's dead
+      // either way -- clear the cookie so we don't keep sending a token
+      // that will trip reuse-detection on a future attempt.
+      response.cookies.delete({ name: REFRESH_COOKIE, path: "/api/auth" });
+    }
+    // Anything else (429 rate-limited, 5xx transient backend issue) says
+    // nothing about whether the refresh token is still valid -- leave the
+    // cookie in place so the caller can retry with the same session.
     return response;
   }
 
