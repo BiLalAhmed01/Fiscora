@@ -24,6 +24,15 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 # client IP off it via the limiter's key_func).
 AUTH_RATE_LIMIT = "5/minute"
 
+# /refresh is called automatically in the background by the frontend on
+# every access-token expiry (and on page load), not something a human types
+# -- it shouldn't share a human-attempt-sized bucket with /login and
+# /signup. It especially shouldn't punish users behind a shared IP (office/
+# campus NAT, carrier CGNAT) whose background refreshes stack up against
+# each other. Kept far above normal per-user refresh volume while still
+# bounding abuse of the refresh-token-reuse-detection endpoint.
+REFRESH_RATE_LIMIT = "30/minute"
+
 
 def _issue_token_pair(db: Session, user: User, family_id: str | None = None) -> TokenResponse:
     """Issues a fresh access token + a new refresh token row. Passing
@@ -75,7 +84,7 @@ def login(request: Request, payload: LoginRequest, db: Session = Depends(get_db)
 
 
 @router.post("/refresh", response_model=TokenResponse)
-@limiter.limit(AUTH_RATE_LIMIT)
+@limiter.limit(REFRESH_RATE_LIMIT)
 def refresh(request: Request, payload: RefreshRequest, db: Session = Depends(get_db)):
     token_hash = hash_refresh_token(payload.refresh_token)
     token_row = db.query(RefreshToken).filter(RefreshToken.token_hash == token_hash).first()

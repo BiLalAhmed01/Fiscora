@@ -19,7 +19,7 @@ from backend.api.deps import get_current_user
 from backend.api.schemas import ChatRequest
 from backend.db.models import ChatMessage, Goal, Transaction, User, WatchlistItem
 from backend.db.session import SessionLocal, get_db
-from backend.rate_limit import limiter
+from backend.rate_limit import limiter, user_or_ip_key
 
 NOT_CONFIGURED_MESSAGE = (
     "Fiscora isn't connected to an AI provider yet -- ask whoever runs this deployment to set "
@@ -124,7 +124,9 @@ def _ndjson(agent: str | None, content: str) -> str:
 
 
 @router.post("/chat")
-@limiter.limit("20/minute")  # cost control -- each call is a paid LLM request
+@limiter.limit("20/minute", key_func=user_or_ip_key)  # per-user cost control on this paid LLM endpoint;
+# falls back to per-IP only for the (never-authenticated-in-practice, /chat
+# requires a user) unauthenticated case -- see user_or_ip_key.
 async def chat(
     request: Request,
     payload: ChatRequest,
